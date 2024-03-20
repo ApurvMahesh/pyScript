@@ -1,7 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.feature_selection import SelectKBest
 from sklearn.feature_selection import f_classif
@@ -9,11 +7,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
 from imblearn.over_sampling import SMOTE
 from sklearn.metrics import classification_report
-from sklearn.metrics import precision_score, recall_score, f1_score
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
-import jsonify
 
 def predictOutput(new_json_data):
     data = pd.read_csv('nba_logreg.csv')
