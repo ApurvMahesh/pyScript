@@ -3,6 +3,5 @@ Werkzeug
 jsonify
 pandas
 numpy
-openpyxl
 scikit-learn
 imbalanced-learn
