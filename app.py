@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
-import json
 import sqlite3
+import run
 
 
 app = Flask(__name__)
@@ -106,7 +106,11 @@ def single_event_workflow(id):
                return jsonify(updated_event)
 
 
-
+@app.route('/predict-output', methods=['POST'])
+def predict_output_workflow():
+    output = run.predictOutput(request.json)
+    print("Output is ", output)
+    return output
 
 if __name__ == '__main__':
    app.run(host='0.0.0.0', port=int("5000"), debug=True)
