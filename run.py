@@ -9,22 +9,34 @@ from imblearn.over_sampling import SMOTE
 from sklearn.metrics import classification_report
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
+from sklearn.model_selection import cross_val_score, KFold
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.svm import SVC
 
-def predictOutput(new_json_data):
+def predictOutput(new_json_data, test_size = 0.2, k_fold = 5):
     data = pd.read_csv('nba_logreg.csv')
-    data_types = data.dtypes
-    data.rename(columns = {'GP':'GamesPlayed', 'MIN':'MinutesPlayed', 'PTS':'Points/Game', 'FGM':'FieldGoalsMade', 
+    data_renamed = data.rename(columns = {'GP':'GamesPlayed', 'MIN':'MinutesPlayed', 'PTS':'Points/Game', 'FGM':'FieldGoalsMade', 
                         'FGA':'FieldGoalsAttempts', 'FG%':'FieldGoals%', '3P Made':'3PointMade', '3PA':'3PointAttempts', 
                         '3P%':'3Point%', 'FTM':'FreeThrowMade', 'FTA':'FreeThrowAttempts', 'FT%':'FreeThrow%', 
                         'OREB':'OffensiveRebounds', 'DREB':'DefensiveRebounds', 'REB':'Rebounds', 'AST':'Assists', 
-                        'STL':'Steals', 'BLK':'Blocks', 'TOV':'Turnovers'}, inplace = True) 
-    data_no_duplicates = data.drop_duplicates()
+                        'STL':'Steals', 'BLK':'Blocks', 'TOV':'Turnovers'}) 
+    data_no_duplicates = data_renamed.drop_duplicates()
     data_no_null = data_no_duplicates.fillna(0)
+
+    # Selecting only numeric columns for calculating skewness
+    numeric_data = data_no_duplicates.select_dtypes(include=['number'])
+
+    # Calculating the median of each column excluding missing values
+    column_medians = numeric_data.median()
+
+    # Imputing missing values with the corresponding median for each column
+    data_imputed_median = data_no_duplicates.fillna(column_medians)
 
     non_binary_columns = []
     # Iterating through columns and checking for unique values
-    for col in data_no_null.columns:
-        if data_no_null[col].nunique() > 2:  # Check if more than 2 unique values
+    for col in data_imputed_median.columns:
+        if data_imputed_median[col].nunique() > 2:  # Check if more than 2 unique values
             non_binary_columns.append(col)
 
     def remove_outlier(col):
@@ -41,15 +53,13 @@ def predictOutput(new_json_data):
                                     'Rebounds', 'Assists', 'Steals', 'Blocks', 'Turnovers']
 
     for column in columns_to_remove_outliers_from:
-        if data_no_null[column].dtype != 'object':
+        if data_imputed_median[column].dtype != 'object':
             lr, ur = remove_outlier(data_no_null[column])
-            data_no_null[column] = np.where(data_no_null[column] > ur, ur, data_no_null[column])
-            data_no_null[column] = np.where(data_no_null[column] < lr, lr, data_no_null[column])
+            data_imputed_median[column] = np.where(data_no_null[column] > ur, ur, data_no_null[column])
+            data_imputed_median[column] = np.where(data_no_null[column] < lr, lr, data_no_null[column])
 
-    result = data_no_null.groupby('TARGET_5Yrs')['Name'].count().reset_index()
-
-    X = data_no_null.drop(columns=['TARGET_5Yrs']) # all columns except the target_class will be stored in as features
-    y = data_no_null['TARGET_5Yrs']
+    X = data_imputed_median.drop(columns=['TARGET_5Yrs']) # all columns except the target_class will be stored in as features
+    y = data_imputed_median['TARGET_5Yrs']
 
     X = X.drop(columns = ['Name'])
     X.head()
@@ -71,7 +81,7 @@ def predictOutput(new_json_data):
     selected_indices = k_best_selector.get_support(indices=True)
 
     # Printing the selected feature names
-    selected_feature_names = X.columns[selected_indices]
+    selected_feature_names_k = X.columns[selected_indices]
 
     # Selecting the top 10 significant features using Fisher Score 
     f_score_selector = SelectKBest(score_func=f_classif, k=10)
@@ -81,81 +91,162 @@ def predictOutput(new_json_data):
     selected_indices = f_score_selector.get_support(indices=True)
 
     # Print the selected feature names
-    selected_feature_names = X.columns[selected_indices]
+    selected_feature_names_f = X.columns[selected_indices]
 
-    # Case 1: 80% training, 20% testing
-    # random_seed 42 is being used in our solutions, can be any number - it matters for the reason we need fixed results everytime 
-    x_train1, x_test1, y_train1, y_test1 = train_test_split(X, y, test_size=0.2, random_state=42)
+    # SMOTE Oversampling for handling class imbalance
+    # Selecting the top significant features for training
+    selected_features =  [element for element in selected_feature_names_f if element in selected_feature_names_k]
+    X_selected = X[selected_features]
 
-    # Applying SMOTE oversampling technique to the training data for Case 1
+    # Instantiating the SMOTE algorithm
     smote = SMOTE(random_state=42)
-    x_train_resampled1, y_train_resampled1 = smote.fit_resample(x_train1, y_train1)
 
-    # Initializing the Decision Tree Classifier for Case 1
-    model1 = DecisionTreeClassifier(random_state=42)
+    # Applying SMOTE to the selected features and target variable
+    X_resampled, y_resampled = smote.fit_resample(X_selected, y)
 
-    # Training the model for Case 1
-    model1.fit(x_train_resampled1, y_train_resampled1)
+    X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size = test_size, random_state = 0)
 
-    # Making predictions for Case 1
-    y_pred1 = model1.predict(x_test1)
+    randomForestMeanScore = "{:.2f}".format(RandomForestCrossvalidation(k_fold, X_train, y_train))
+    logisticRegressionMeanScore = "{:.2f}".format(LogisticRegressionCrossvalidation(k_fold, X_train, y_train))
+    gradientBoostMeanScore = "{:.2f}".format(GradientBoostCrossvalidation(k_fold, X_train, y_train))
+    svmMeanScore = "{:.2f}".format(SupportVectorMachinesCrossvalidation(k_fold, X_train, y_train))
 
-    # Evaluating the model for Case 1
-    print("Classification Report for Case 1 (80% training, 20% testing):")
-    print(classification_report(y_test1, y_pred1))
-
-    # Case 2: 10% training, 90% testing
-    x_train2, x_test2, y_train2, y_test2 = train_test_split(X, y, test_size=0.1, random_state=42)
-
-    # Applying SMOTE oversampling technique to the training data for Case 2
-    smote = SMOTE(random_state=42)
-    x_train_resampled2, y_train_resampled2 = smote.fit_resample(x_train2, y_train2)
-
-    # Initializing the Decision Tree Classifier for Case 2
-    model2 = DecisionTreeClassifier(random_state=42)
-
-    # Training the model for Case 2
-    model2.fit(x_train_resampled2, y_train_resampled2)
-
-    # Making predictions for Case 2
-    y_pred2 = model2.predict(x_test2)
-
-    # Evaluating the model for Case 2
-    print("\nClassification Report for Case 2 (90% training, 10% testing):")
-    print(classification_report(y_test2, y_pred2))
-
-    # Initialize the Random Forest Classifier
-    rf_model_1 = RandomForestClassifier(random_state=42)
-    rf_model_2 = RandomForestClassifier(random_state=42)
-
-    # Train the model
-    rf_model_1.fit(x_train_resampled1, y_train_resampled1)
-    rf_model_2.fit(x_train_resampled2, y_train_resampled2)
-
-
-    # Make predictions
-    y_pred_rf_1 = rf_model_1.predict(x_test1)
-    y_pred_rf_2 = rf_model_2.predict(x_test2)
-
-    print("predicted Y for test 1", y_pred_rf_1)
-    print("predicted Y for test 2", y_pred_rf_2)
-
-
-
-    # Ensure the columns are in the correct format and order
-    # new_data = new_data[X.columns]
     new_data = pd.DataFrame.from_dict(new_json_data, orient='index').T
+    new_data = new_data[selected_features]
+    randomForestPrediction = RandomForestPrediction(X_train, y_train, new_data)
+    logisticregressionPrediction = LogisticRegressionPrediction(X_train, y_train, new_data)
+    gradientBoostPrediction = GradientBoostingPrediction(X_train, y_train, new_data)
+    svmPrediction = SupportVectorPrediction(X_train, y_train, new_data)
 
-    # # Predict using Decision Tree Classifier
-    prediction_dt = model1.predict(new_data)
-
-    # # Predict using Random Forest Classifier
-    prediction_rf = rf_model_1.predict(new_data)
-
-    # # Print the predictions
-    # print("Prediction using Decision Tree Classifier:", prediction_dt)
-    # print("Prediction using Random Forest Classifier:", prediction_rf)
     return [
-        "Result for Prediction using Decision Tree Classifier: " + str(prediction_dt[0]), 
-        "Result for Prediction using Random Forest Classifier: " + str(prediction_rf[0])
+        str(k_fold) + "-fold with Train Data Size " + str((1-test_size)*100) +"% & selected features based on Gini & F1 Score - " + str(selected_features),
+        "Random Forest with mean score "+str(randomForestMeanScore)+" predicts output as "+ str(randomForestPrediction), 
+        "Logistic Regression with mean score "+str(logisticRegressionMeanScore)+" predicts output as "+ str(logisticregressionPrediction),
+        "Gradient Boost with mean score "+str(gradientBoostMeanScore)+" predicts output as "+ str(gradientBoostPrediction), 
+        "Support Vector Machines with mean score "+str(svmMeanScore)+" predicts output as "+ str(svmPrediction), 
+ 
         ]
+
+def RandomForestCrossvalidation(k_fold, X_train, y_train):
+    # Defining the number of folds (k)
+    k = k_fold
+
+    # Initializing the KFold object
+    kf = KFold(n_splits=k, shuffle=True, random_state=0)
+
+    # Initializing Random Forest classifier 
+    model = RandomForestClassifier(n_estimators=100, random_state=0)  
+
+    # Performing k-fold cross-validation
+    scores = cross_val_score(model, X_train, y_train, cv=kf)
+
+    # The cross-validation scores
+    print("Cross-validation scores:", scores)
+
+    # Calculating the mean cross-validation score
+    return scores.mean()
+
+def RandomForestPrediction(X_train, y_train, X_test):
+  # Initializing Random Forest classifier
+    rf_model = RandomForestClassifier(n_estimators=100, random_state=0)
+
+    # Training the model on the entire training dataset
+    rf_model.fit(X_train, y_train)
+
+    # Making predictions on the testing dataset
+    y_pred = rf_model.predict(X_test)  
+
+    return y_pred
+
+def LogisticRegressionCrossvalidation(k_fold, X_train, y_train):
+    # Defining the number of folds (k)
+    k = k_fold
+
+    # Initializing the KFold object
+    kf = KFold(n_splits=k, shuffle=True, random_state=0)
+
+    # Initializing model 
+    model = LogisticRegression(max_iter=1000)  
+
+    # Performing k-fold cross-validation
+    scores = cross_val_score(model, X_train, y_train, cv=kf)
+
+    # The cross-validation scores
+    print("Cross-validation scores:", scores)
+
+    # Calculating the mean cross-validation score
+    return scores.mean()
+
+def LogisticRegressionPrediction(X_train, y_train, X_test):
+  # Initializing Random Forest classifier
+    model = LogisticRegression(max_iter=1000)  
+
+    # Training the model on the entire training dataset
+    model.fit(X_train, y_train)
+
+    # Making predictions on the testing dataset
+    y_pred = model.predict(X_test)  
+
+    return y_pred
+
+def GradientBoostCrossvalidation(k_fold, X_train, y_train):
+    # Defining the number of folds (k)
+    k = k_fold
+
+    # Initializing the KFold object
+    kf = KFold(n_splits=k, shuffle=True, random_state=0)
+
+    # Initializing Gradient Boosting classifier 
+    model = GradientBoostingClassifier(n_estimators=100, random_state=0)  
+
+    # Performing k-fold cross-validation
+    scores = cross_val_score(model, X_train, y_train, cv=kf)
+
+    # The cross-validation scores
+    print("Cross-validation scores:", scores)
+
+    # Calculating the mean cross-validation score
+    return scores.mean()
+
+def GradientBoostingPrediction(X_train, y_train, X_test):
+  # Initializing Random Forest classifier
+    model = GradientBoostingClassifier(n_estimators=100, random_state=0)  
+
+    # Training the model on the entire training dataset
+    model.fit(X_train, y_train)
+
+    # Making predictions on the testing dataset
+    y_pred = model.predict(X_test)  
+
+    return y_pred
+
+def SupportVectorMachinesCrossvalidation(k_fold, X_train, y_train):
+    # Defining the number of folds (k)
+    k = k_fold
+
+    # Initializing the KFold object
+    kf = KFold(n_splits=k, shuffle=True, random_state=0)
+
+    # Initializing Support Vector Machine classifier 
+    model = SVC(kernel='rbf', random_state=0)  # Example: using Radial Basis Function (RBF) kernel
+
+    # Performing k-fold cross-validation
+    scores = cross_val_score(model, X_train, y_train, cv=kf)
+
+    # The cross-validation scores
+    print("Cross-validation scores:", scores)
+
+    # Calculating the mean cross-validation score
+    return scores.mean()
+
+def SupportVectorPrediction(X_train, y_train, X_test):
+  # Initializing Random Forest classifier
+    model = SVC(kernel='rbf', random_state=0)  # Example: using Radial Basis Function (RBF) kernel
+
+    # Training the model on the entire training dataset
+    model.fit(X_train, y_train)
+
+    # Making predictions on the testing dataset
+    y_pred = model.predict(X_test)  
+
+    return y_pred

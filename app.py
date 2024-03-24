@@ -108,7 +108,9 @@ def single_event_workflow(id):
 
 @app.route('/predict-output', methods=['POST'])
 def predict_output_workflow():
-    output = run.predictOutput(request.json)
+    tSize = float(request.headers.get('TestSize', 0.2))
+    kFold = int(request.headers.get('KFold', 5))
+    output = run.predictOutput(request.json, tSize, kFold)
     print("Output is ", output)
     return output
 
